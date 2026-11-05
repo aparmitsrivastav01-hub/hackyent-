@@ -1,0 +1,9 @@
+.env
+.next/
+node_modules/
+backend/.venv/
+backend/opportunityos.db
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+*.py[cod]
