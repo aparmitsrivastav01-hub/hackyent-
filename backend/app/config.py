@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./opportunityos.db"
     app_env: str = "development"
     frontend_origin: str = "http://localhost:3000"
+    resend_api_key: str = ""
+    email_from: str = ""
+    email_to: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
 

@@ -44,3 +44,39 @@ def test_api_profile_and_opportunity_persistence():
         app.dependency_overrides.clear()
         Base.metadata.drop_all(engine)
         engine.dispose()
+
+
+def test_email_status_and_missing_configuration_endpoints_do_not_expose_secrets(monkeypatch):
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "resend_api_key", "private-test-token")
+    monkeypatch.setattr(settings, "email_from", "")
+    monkeypatch.setattr(settings, "email_to", "")
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    def override_db():
+        session = TestingSession()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        with TestClient(app) as client:
+            status = client.get("/api/email/status")
+            assert status.status_code == 200
+            assert status.json()["configured"] is False
+            assert status.json()["recipient"] is None
+            assert "private-test-token" not in status.text
+            response = client.post("/api/email/test")
+            assert response.status_code == 503
+            assert "RESEND_API_KEY" not in response.text
+            assert "private-test-token" not in response.text
+    finally:
+        app.dependency_overrides.clear()
+        Base.metadata.drop_all(engine)
+        engine.dispose()

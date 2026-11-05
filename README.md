@@ -12,7 +12,7 @@ OpportunityOS discovers publicly accessible hackathons and internships, extracts
 
 ## Configure
 
-Copy `backend/.env.example` to `backend/.env`, then set `TINYFISH_API_KEY` and `GEMINI_API_KEY`. The root `.env.example` lists the same server settings and the optional frontend API URL. `GEMINI_MODEL` defaults to `gemini-2.5-flash`. `DATABASE_URL` defaults to a local SQLite database and accepts a PostgreSQL URL such as `postgresql+psycopg://user:password@localhost:5432/opportunityos`.
+Copy `backend/.env.example` to `backend/.env`, then set `TINYFISH_API_KEY` and `GEMINI_API_KEY`. To enable automatic email digests, also set `RESEND_API_KEY`, `EMAIL_FROM` (a verified Resend sender), and `EMAIL_TO`. Email is optional; discovery continues when email is not configured, and the dashboard shows which values are missing. The root `.env.example` lists the same server settings and the optional frontend API URL. `GEMINI_MODEL` defaults to `gemini-2.5-flash`. `DATABASE_URL` defaults to a local SQLite database and accepts a PostgreSQL URL such as `postgresql+psycopg://user:password@localhost:5432/opportunityos`.
 
 ## Run locally
 
@@ -47,6 +47,7 @@ Open `http://localhost:3000`. Set `NEXT_PUBLIC_API_URL` if the API runs somewher
 5. Application links are retained only when their literal URL occurs in fetched page text. Source URLs come from TinyFish results.
 6. Similar titles and organizations are checked before persistence. The run retains raw search, fetch, and extraction output for debugging.
 7. Opportunity matches are stored and shown in the dashboard.
+8. Newly saved opportunities are automatically emailed through Resend when email settings are configured. Each successful digest is recorded, and its opportunities are excluded from later digests. Failed deliveries remain eligible to retry.
 
 The Search and Fetch implementations follow TinyFish's current public API documentation: `GET https://api.search.tinyfish.ai` and `POST https://api.fetch.tinyfish.ai`, authenticated using `X-API-Key`. Gemini uses Google's `google-genai` SDK structured response schema. API keys are optional at startup; discovery returns a clear configuration error until both are set.
 
@@ -70,8 +71,9 @@ Tests mock external services and do not call TinyFish or Gemini.
 - `POST /api/discovery/run/{run_id}/status`
 - `GET /api/research/runs`
 - `GET /api/dashboard/stats`
+- `GET /api/email/status`, `POST /api/email/test`, and `POST /api/email/digest`
 - `GET` / `PUT /api/profile`
 
 ## Current scope
 
-Email, scheduling, automatic applications, and form submissions are intentionally out of scope. No example opportunities are inserted as discoveries. Deployments should use PostgreSQL and a durable background worker before relying on long-running discovery jobs in production.
+Email notifications use the Resend API and store each attempt and its included opportunities in the database. Resend's accepted message response is recorded as `sent`; delivery to the recipient's inbox requires provider delivery events or inbox confirmation, which this version does not currently consume. No example opportunities are inserted as discoveries. Deployments should use PostgreSQL and a durable background worker before relying on long-running discovery jobs in production.

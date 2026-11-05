@@ -84,3 +84,29 @@ class UserProfile(Base):
     profile: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
+
+class EmailDelivery(Base):
+    __tablename__ = "email_deliveries"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recipient: Mapped[str] = mapped_column(String(320))
+    subject: Mapped[str] = mapped_column(String(300))
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    provider: Mapped[str] = mapped_column(String(30), default="resend")
+    provider_message_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opportunity_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_test: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    items: Mapped[list["EmailDeliveryItem"]] = relationship(back_populates="delivery", cascade="all, delete-orphan")
+
+
+class EmailDeliveryItem(Base):
+    __tablename__ = "email_delivery_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    delivery_id: Mapped[int] = mapped_column(ForeignKey("email_deliveries.id", ondelete="CASCADE"), index=True)
+    opportunity_id: Mapped[int] = mapped_column(ForeignKey("opportunities.id", ondelete="CASCADE"), index=True)
+    delivery: Mapped[EmailDelivery] = relationship(back_populates="items")
+    opportunity: Mapped[Opportunity] = relationship()
+    __table_args__ = (UniqueConstraint("delivery_id", "opportunity_id", name="uq_email_delivery_opportunity"),)
+

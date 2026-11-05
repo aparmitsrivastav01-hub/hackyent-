@@ -2,15 +2,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, distinct, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from .config import get_settings
 from .database import get_db
 from .discovery import execute_discovery, profile_or_default
-from .models import Opportunity, OpportunityMatch, ResearchRun, UserProfile
+from .models import EmailDelivery, EmailDeliveryItem, Opportunity, OpportunityMatch, ResearchRun, UserProfile
 from .schemas import DiscoveryRequest, OpportunityOut, ProfilePayload, ReviewRequest
 from .services.matching import score_opportunity
+from .services.email import EmailConfigurationError, email_configuration, send_digest, serialize_delivery
 
 
 @asynccontextmanager
@@ -25,7 +26,35 @@ app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin, "htt
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "services": {"tinyfish_configured": bool(settings.tinyfish_api_key), "gemini_configured": bool(settings.gemini_api_key)}}
+    _, missing_email = email_configuration()
+    return {"status": "ok", "services": {"tinyfish_configured": bool(settings.tinyfish_api_key), "gemini_configured": bool(settings.gemini_api_key), "email_configured": not missing_email}}
+
+
+@app.get("/api/email/status")
+def email_status(db: Session = Depends(get_db)):
+    _, missing = email_configuration()
+    latest = db.scalar(select(EmailDelivery).order_by(desc(EmailDelivery.created_at)).limit(1))
+    sent_count = db.scalar(select(func.count(distinct(EmailDeliveryItem.opportunity_id))).join(EmailDelivery).where(EmailDelivery.status == "sent")) or 0
+    settings, _ = email_configuration()
+    return {"configured": not missing, "missing_configuration": missing, "recipient": settings.email_to if not missing else None, "provider": "Resend", "opportunities_sent": sent_count, "last_delivery": serialize_delivery(latest)}
+
+
+@app.post("/api/email/test")
+async def send_test_email(db: Session = Depends(get_db)):
+    try:
+        delivery = await send_digest(db, is_test=True)
+    except EmailConfigurationError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return serialize_delivery(delivery)
+
+
+@app.post("/api/email/digest")
+async def send_latest_email_digest(db: Session = Depends(get_db)):
+    try:
+        delivery = await send_digest(db, allow_empty=True)
+    except EmailConfigurationError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return serialize_delivery(delivery)
 
 
 def serialize(record: Opportunity) -> dict:

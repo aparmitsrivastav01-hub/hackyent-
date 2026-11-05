@@ -11,6 +11,7 @@ from .database import SessionLocal
 from .models import Opportunity, OpportunityMatch, ResearchRun, UserProfile
 from .schemas import ExtractedOpportunity, ProfilePayload
 from .services.gemini import GeminiIntelligence, GeminiQuotaError
+from .services.email import EmailConfigurationError, send_digest
 from .services.matching import is_duplicate, normalize, score_opportunity
 from .services.tinyfish import TinyFishClient
 
@@ -217,6 +218,13 @@ async def execute_discovery(run_id: int, requested_type: str, locations: list[st
             except Exception as exc:
                 errors.append(f"Gemini extraction {url}: {exc}")
         db.commit()
+        if saved:
+            try:
+                delivery = await send_digest(db)
+                if delivery and delivery.status == "failed":
+                    errors.append(f"Email notification failed: {delivery.error}")
+            except EmailConfigurationError as exc:
+                raw_output.append({"stage": "email_notification", "status": "skipped", "reason": str(exc)})
         run.records_found = found
         run.records_saved = saved
         run.duplicates_detected = duplicates
