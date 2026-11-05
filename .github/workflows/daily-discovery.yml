@@ -2,8 +2,8 @@ name: OpportunityOS daily discovery
 
 on:
   schedule:
-    # GitHub Actions cron uses UTC. 18:30 UTC is midnight the following day in IST.
-    - cron: "30 18 * * *"
+    # GitHub Actions cron uses UTC. 06:30 UTC is 12:00 PM IST.
+    - cron: "30 6 * * *"
   workflow_dispatch:
 
 concurrency:

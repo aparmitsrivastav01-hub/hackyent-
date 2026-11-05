@@ -28,8 +28,10 @@ app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin, "htt
 
 def next_ist_run():
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
-    next_date = now.date() + timedelta(days=1)
-    return datetime.combine(next_date, time.min, tzinfo=ZoneInfo("Asia/Kolkata"))
+    next_run = datetime.combine(now.date(), time(hour=12), tzinfo=ZoneInfo("Asia/Kolkata"))
+    if now >= next_run:
+        next_run += timedelta(days=1)
+    return next_run
 
 
 @app.get("/api/automation/status")
@@ -44,7 +46,7 @@ def automation_status(db: Session = Depends(get_db)):
     hacks = db.scalar(select(func.count(Opportunity.id)).where(Opportunity.first_discovered_at >= today_start, Opportunity.first_discovered_at < tomorrow, Opportunity.opportunity_type == "hackathon")) or 0
     internships = db.scalar(select(func.count(Opportunity.id)).where(Opportunity.first_discovered_at >= today_start, Opportunity.first_discovered_at < tomorrow, Opportunity.opportunity_type == "internship")) or 0
     latest_email = db.scalar(select(EmailDelivery).order_by(desc(EmailDelivery.created_at)).limit(1))
-    return {"enabled": enabled, "status": "active" if enabled else "inactive", "schedule": "Daily at 12:00 AM IST", "timezone": "Asia/Kolkata", "next_run": next_ist_run() if enabled else None, "last_run": ({"id": runs.id, "status": runs.status, "started_at": runs.started_at, "completed_at": runs.completed_at, "pages_searched": runs.records_found, "saved": runs.records_saved, "duplicates": runs.duplicates_detected} if runs else None), "opportunities_today": total_today, "hackathons_today": hacks, "internships_today": internships, "last_email": serialize_delivery(latest_email)}
+    return {"enabled": enabled, "status": "active" if enabled else "inactive", "schedule": "Daily at 12:00 PM IST", "timezone": "Asia/Kolkata", "next_run": next_ist_run() if enabled else None, "last_run": ({"id": runs.id, "status": runs.status, "started_at": runs.started_at, "completed_at": runs.completed_at, "pages_searched": runs.records_found, "saved": runs.records_saved, "duplicates": runs.duplicates_detected} if runs else None), "opportunities_today": total_today, "hackathons_today": hacks, "internships_today": internships, "last_email": serialize_delivery(latest_email)}
 
 
 @app.put("/api/automation/status")

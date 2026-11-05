@@ -40,7 +40,7 @@ Open `http://localhost:3000`. Set `NEXT_PUBLIC_API_URL` if the API runs somewher
 
 ## Daily automation on GitHub Actions
 
-`.github/workflows/daily-discovery.yml` runs at `18:30 UTC`, which is `12:00 AM Asia/Kolkata` the next day. GitHub-hosted runners run independently of your computer and dashboard. GitHub scheduled events can be delayed during high load, so this is a daily midnight schedule rather than a guaranteed exact-minute service.
+`.github/workflows/daily-discovery.yml` runs at `06:30 UTC`, which is `12:00 PM Asia/Kolkata`. GitHub-hosted runners run independently of your computer and dashboard. GitHub scheduled events can be delayed during high load, so this is a daily noon schedule rather than a guaranteed exact-minute service.
 
 To activate it, configure repository Actions secrets `TINYFISH_API_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_TO`, and `DATABASE_URL`. `DATABASE_URL` must point to persistent PostgreSQL shared with the deployed dashboard backend; local SQLite cannot be shared with GitHub-hosted runners. Run `alembic upgrade head` on that database (the workflow also applies migrations), deploy the backend/dashboard against it, then enable Daily Automation in the dashboard. The enable switch is stored in the database and the scheduled runner skips work while disabled. `workflow_dispatch` can be used to manually inspect the external workflow. GitHub concurrency prevents overlapping scheduled jobs.
 

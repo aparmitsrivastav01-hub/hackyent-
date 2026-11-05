@@ -8,6 +8,14 @@ from app.main import app
 from app.models import Opportunity, OpportunityMatch
 
 
+def test_automation_next_run_is_noon_ist():
+    from app.main import next_ist_run
+    from zoneinfo import ZoneInfo
+    next_run = next_ist_run()
+    assert next_run.hour == 12 and next_run.minute == 0
+    assert next_run.tzinfo == ZoneInfo("Asia/Kolkata")
+
+
 def test_api_profile_and_opportunity_persistence():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
