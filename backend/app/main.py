@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from .config import get_settings
 from .database import get_db
-from .discovery import execute_discovery, profile_or_default
-from .models import AutomationSetting, EmailDelivery, EmailDeliveryItem, Opportunity, OpportunityMatch, ResearchRun, UserProfile
+from .discovery import execute_discovery, profile_or_default, retry_pending_extractions
+from .models import AutomationSetting, EmailDelivery, EmailDeliveryItem, Opportunity, OpportunityMatch, RawDiscoveryResult, ResearchRun, UserProfile
 from .schemas import AutomationUpdate, DiscoveryRequest, OpportunityOut, ProfilePayload, ReviewRequest
 from .services.matching import score_opportunity
 from .services.email import EmailConfigurationError, email_configuration, send_digest, serialize_delivery
@@ -90,6 +90,24 @@ async def send_latest_email_digest(db: Session = Depends(get_db)):
     except EmailConfigurationError as exc:
         raise HTTPException(503, str(exc)) from exc
     return serialize_delivery(delivery)
+
+
+@app.get("/api/raw-results/status")
+def raw_results_status(db: Session = Depends(get_db)):
+    total = db.scalar(select(func.count(RawDiscoveryResult.id))) or 0
+    pending = db.scalar(select(func.count(RawDiscoveryResult.id)).where(RawDiscoveryResult.extraction_status == "PENDING_EXTRACTION")) or 0
+    due = db.scalar(select(func.count(RawDiscoveryResult.id)).where(RawDiscoveryResult.extraction_status == "PENDING_EXTRACTION", (RawDiscoveryResult.retry_after.is_(None)) | (RawDiscoveryResult.retry_after <= datetime.now(timezone.utc)))) or 0
+    last_raw_digest = db.scalar(select(func.max(RawDiscoveryResult.emailed_at)))
+    state = "cooldown" if pending and not due else ("pending" if pending else "ready")
+    return {"raw_results_count": total, "pending_extraction_count": pending, "retry_ready_count": due, "gemini_status": state, "last_raw_digest_sent": last_raw_digest}
+
+
+@app.post("/api/raw-results/retry")
+async def retry_raw_extractions():
+    try:
+        return await retry_pending_extractions()
+    except Exception as exc:
+        raise HTTPException(503, "Pending extraction retry failed; raw results remain saved.") from exc
 
 
 def serialize(record: Opportunity) -> dict:

@@ -55,7 +55,8 @@ The schedule is not active until this workflow is present on the repository's de
 5. Application links are retained only when their literal URL occurs in fetched page text. Source URLs come from TinyFish results.
 6. Similar titles and organizations are checked before persistence. The run retains raw search, fetch, and extraction output for debugging.
 7. Opportunity matches are stored and shown in the dashboard.
-8. Newly saved opportunities are automatically emailed through Resend when email settings are configured. Each successful digest is recorded, and its opportunities are excluded from later digests. Failed deliveries remain eligible to retry.
+8. TinyFish pages are persisted before Gemini extraction. If extraction fails, an explicitly unverified raw-results section is mailed and the pages remain queued with a retry cooldown. Successful recovery links the raw page to an existing or newly saved opportunity.
+9. One email digest is generated per run: verified opportunities and pending raw pages can appear together. A repeated run containing only unchanged duplicates does not send another digest; a truly empty search sends an empty report.
 
 The Search and Fetch implementations follow TinyFish's current public API documentation: `GET https://api.search.tinyfish.ai` and `POST https://api.fetch.tinyfish.ai`, authenticated using `X-API-Key`. Gemini uses Google's `google-genai` SDK structured response schema. API keys are optional at startup; discovery returns a clear configuration error until both are set.
 
@@ -81,6 +82,7 @@ Tests mock external services and do not call TinyFish or Gemini.
 - `GET /api/dashboard/stats`
 - `GET` / `PUT /api/automation/status`
 - `GET /api/email/status`, `POST /api/email/test`, and `POST /api/email/digest`
+- `GET /api/raw-results/status` and `POST /api/raw-results/retry`
 - `GET` / `PUT /api/profile`
 
 ## Current scope

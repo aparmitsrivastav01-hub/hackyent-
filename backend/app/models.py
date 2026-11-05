@@ -79,6 +79,25 @@ class ResearchRun(Base):
     raw_output: Mapped[list] = mapped_column(JSON, default=list)
 
 
+class RawDiscoveryResult(Base):
+    __tablename__ = "raw_discovery_results"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("research_runs.id", ondelete="CASCADE"), index=True)
+    opportunity_type: Mapped[str] = mapped_column(String(20), default="other", index=True)
+    source_title: Mapped[str] = mapped_column(String(500), default="Untitled source")
+    source_name: Mapped[str] = mapped_column(String(300), default="Unknown source")
+    source_url: Mapped[str] = mapped_column(Text, unique=True)
+    snippet: Mapped[str] = mapped_column(Text, default="")
+    raw_text: Mapped[str] = mapped_column(Text, default="")
+    extraction_status: Mapped[str] = mapped_column(String(30), default="PENDING_EXTRACTION", index=True)
+    extraction_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    emailed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    email_delivery_id: Mapped[int | None] = mapped_column(ForeignKey("email_deliveries.id", ondelete="SET NULL"), nullable=True)
+    opportunity_id: Mapped[int | None] = mapped_column(ForeignKey("opportunities.id", ondelete="SET NULL"), nullable=True)
+
+
 class UserProfile(Base):
     __tablename__ = "user_profiles"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -103,6 +122,7 @@ class EmailDelivery(Base):
     provider_message_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     opportunity_count: Mapped[int] = mapped_column(Integer, default=0)
+    raw_result_count: Mapped[int] = mapped_column(Integer, default=0)
     is_test: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

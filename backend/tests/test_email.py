@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.config import get_settings
 from app.database import Base
-from app.models import EmailDelivery, EmailDeliveryItem, Opportunity, OpportunityMatch, ResearchRun
+from app.models import EmailDelivery, EmailDeliveryItem, Opportunity, OpportunityMatch, RawDiscoveryResult, ResearchRun
 from app.schemas import ExtractedOpportunity, ExtractionResult
 from app.services import email
 
@@ -82,6 +82,10 @@ def test_template_has_separate_sections_details_links_and_empty_fallback(db_sess
     empty_html, empty_text = email.render_digest([])
     assert "No new opportunities" in empty_html
     assert "No new opportunities" in empty_text
+    raw = RawDiscoveryResult(run_id=1, opportunity_type="other", source_title="Unclassified page", source_name="example.org", source_url="https://example.org/raw", snippet="Source snippet", raw_text="Raw source text", extraction_status="PENDING_EXTRACTION")
+    mixed_html, mixed_text = email.render_digest(entries[:1], raw_results=[raw])
+    assert "Hackathons" in mixed_html and "UNVERIFIED RAW RESULTS" in mixed_html
+    assert "Other Unclassified Results" in mixed_text and "Raw source text" in mixed_text
 
 
 def test_sent_opportunities_are_not_included_again_and_delivery_persists(db_session, monkeypatch):
@@ -233,3 +237,122 @@ def test_discovery_saves_opportunity_then_sends_digest(db_session, monkeypatch):
         assert "Verified Build" in deliveries[0]["text"]
     finally:
         check.close()
+
+
+@pytest.mark.parametrize("failure", ["quota", "unavailable"])
+def test_discovery_sends_raw_fallback_when_gemini_fails(db_session, monkeypatch, failure):
+    configure_email(monkeypatch)
+    _, factory = db_session
+    from app import discovery
+
+    class FakeTinyFish:
+        def __init__(self, key): pass
+        async def search(self, query, domains=None):
+            if "internship" in query:
+                url = "https://internshala.com/internship/detail/ai-ml-role"
+            else:
+                url = "https://devfolio.co/hackathons/ai-build-123"
+            return {"results": [{"url": url, "title": query, "snippet": "Original TinyFish snippet"}]}
+        async def fetch(self, urls):
+            return {"results": [{"url": url, "title": "Original page title", "text": f"Raw source content for {url}. Applications open now.", "links": []} for url in urls], "errors": []}
+
+    class FailingGemini:
+        def __init__(self, key, model): pass
+        async def extract(self, page, kind):
+            if failure == "quota":
+                from app.services.gemini import GeminiQuotaError
+                raise GeminiQuotaError("Gemini daily request quota is exhausted")
+            raise RuntimeError("Gemini service timeout")
+
+    payloads = []
+    async def fake_post(payload, api_key, client=None):
+        payloads.append(payload)
+        return {"id": "re_raw_mock"}
+
+    monkeypatch.setattr(discovery, "SessionLocal", factory)
+    monkeypatch.setattr(discovery, "TinyFishClient", FakeTinyFish)
+    monkeypatch.setattr(discovery, "GeminiIntelligence", FailingGemini)
+    monkeypatch.setattr(email, "_post_resend", fake_post)
+    db = factory(); run = ResearchRun(opportunity_type="both"); db.add(run); db.commit(); run_id = run.id; db.close()
+    asyncio.run(discovery.execute_discovery(run_id, "both", ["India", "Online"], max_pages=10))
+    check = factory()
+    try:
+        raw = check.scalars(select(RawDiscoveryResult).where(RawDiscoveryResult.run_id == run_id)).all()
+        delivery = check.scalar(select(EmailDelivery))
+        assert len(raw) >= 2
+        assert all(row.extraction_status == "PENDING_EXTRACTION" for row in raw)
+        assert all(row.emailed_at is not None for row in raw)
+        assert delivery.raw_result_count >= 2 and delivery.opportunity_count == 0
+        assert len(payloads) == 1
+        assert "UNVERIFIED RAW RESULTS" in payloads[0]["html"]
+        assert "Pending AI Processing" in payloads[0]["text"]
+        assert "Potential Hackathons" in payloads[0]["text"]
+        assert "Potential Internships" in payloads[0]["text"]
+        assert "Raw source content" in payloads[0]["text"]
+        retry_calls = []
+        class CountingGemini(FailingGemini):
+            async def extract(self, page, kind):
+                retry_calls.append(page["url"])
+                return await super().extract(page, kind)
+        monkeypatch.setattr(discovery, "GeminiIntelligence", CountingGemini)
+        retry_result = asyncio.run(discovery.retry_pending_extractions())
+        assert retry_result["processed"] == 0
+        assert retry_calls == []
+    finally:
+        check.close()
+
+
+def test_retry_pending_raw_extraction_creates_structured_record_and_digest(db_session, monkeypatch):
+    configure_email(monkeypatch)
+    db, factory = db_session
+    from app import discovery
+    from app.schemas import ExtractionResult
+    raw = RawDiscoveryResult(run_id=1, opportunity_type="hackathon", source_title="Recovered Build", source_name="events.example", source_url="https://events.example/hackathons/recovered", raw_text="Recovered Build is open. Apply at https://events.example/apply", snippet="Recovered Build", extraction_status="PENDING_EXTRACTION")
+    run = ResearchRun(opportunity_type="hackathon"); db.add(run); db.flush(); raw.run_id = run.id; db.add(raw); db.commit(); raw_id=raw.id; db.close()
+
+    class RecoveredGemini:
+        def __init__(self, key, model): pass
+        async def extract(self, page, kind):
+            item = ExtractedOpportunity(title="Recovered Build", opportunity_type="hackathon", organization="Open Lab", source_url=page["url"], application_url="https://events.example/apply", status="open", eligibility="Students")
+            return ExtractionResult(opportunities=[item])
+    payloads=[]
+    async def fake_post(payload, api_key, client=None):
+        payloads.append(payload); return {"id":"re_recovery_mock"}
+    monkeypatch.setattr(discovery, "SessionLocal", factory)
+    monkeypatch.setattr(discovery, "GeminiIntelligence", RecoveredGemini)
+    monkeypatch.setattr(email, "_post_resend", fake_post)
+    result=asyncio.run(discovery.retry_pending_extractions())
+    check=factory()
+    try:
+        recovered=check.get(RawDiscoveryResult,raw_id)
+        assert recovered.extraction_status=="EXTRACTED" and recovered.opportunity_id
+        assert check.query(Opportunity).count()==1
+        assert result["saved"]==1 and result["email_status"]=="sent"
+        assert "Recovered Build" in payloads[0]["text"]
+    finally: check.close()
+
+
+def test_repeated_discovery_of_same_opportunity_does_not_create_record_or_duplicate_email(db_session, monkeypatch):
+    configure_email(monkeypatch)
+    _, factory = db_session
+    from app import discovery
+    from app.schemas import ExtractionResult
+    class FakeTinyFish:
+        def __init__(self,key): pass
+        async def search(self,query,domains=None): return {"results":[{"url":"https://devfolio.co/hackathons/repeatable","title":"Repeatable Build"}]}
+        async def fetch(self,urls): return {"results":[{"url":url,"title":"Repeatable Build","text":"Repeatable Build registration open","links":[]} for url in urls],"errors":[]}
+    class FakeGemini:
+        def __init__(self,key,model): pass
+        async def extract(self,page,kind): return ExtractionResult(opportunities=[ExtractedOpportunity(title="Repeatable Build",opportunity_type="hackathon",organization="Lab",source_url=page["url"],status="open")])
+    payloads=[]
+    async def fake_post(payload,api_key,client=None): payloads.append(payload); return {"id":f"re_repeat_{len(payloads)}"}
+    monkeypatch.setattr(discovery,"SessionLocal",factory); monkeypatch.setattr(discovery,"TinyFishClient",FakeTinyFish); monkeypatch.setattr(discovery,"GeminiIntelligence",FakeGemini); monkeypatch.setattr(email,"_post_resend",fake_post)
+    for _ in range(2):
+        db=factory(); run=ResearchRun(opportunity_type="hackathon"); db.add(run); db.commit(); run_id=run.id; db.close()
+        asyncio.run(discovery.execute_discovery(run_id,"hackathon",["Online"],max_pages=5))
+    check=factory()
+    try:
+        assert check.query(Opportunity).count()==1
+        assert check.query(EmailDelivery).count()==1
+        assert len(payloads)==1
+    finally: check.close()
