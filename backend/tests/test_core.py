@@ -8,8 +8,8 @@ import pytest
 from app.schemas import ExtractedOpportunity, ProfilePayload
 from app.services.matching import is_duplicate, normalize, score_opportunity
 from app.services.tinyfish import TinyFishClient, TinyFishError
-from app.models import Opportunity
-from app.discovery import _is_detail_page, classify_source, derive_status, select_pages
+from app.models import Opportunity, OpportunityMatch
+from app.discovery import _is_detail_page, apply_match_scores, classify_source, derive_status, select_pages
 from app.services.gemini import GeminiIntelligence, GeminiQuotaError
 
 
@@ -35,6 +35,14 @@ def test_matching_scores_missing_fields_without_rejecting_opportunity():
     assert 0 <= score["overall_score"] <= 100
     assert score["skill_score"] > 0
     assert "uncertain" in score["explanation"] or "unverified" in score["explanation"]
+
+
+def test_duplicate_refresh_updates_existing_match_without_inserting_duplicate():
+    opportunity = Opportunity(title="Build Night", normalized_title="build night", opportunity_type="hackathon", source_url="https://example.org/build", normalized_organization="lab")
+    opportunity.match = OpportunityMatch(overall_score=20, skill_score=10, explanation="Old score")
+    apply_match_scores(opportunity, {"overall_score": 88, "skill_score": 90, "eligibility_score": 80, "location_score": 90, "experience_score": 85, "explanation": "Updated score"})
+    assert opportunity.match.overall_score == 88
+    assert opportunity.match.explanation == "Updated score"
 
 
 def test_tinyfish_search_uses_documented_get_endpoint_and_auth():

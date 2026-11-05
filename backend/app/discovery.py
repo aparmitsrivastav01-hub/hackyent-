@@ -73,6 +73,14 @@ def select_pages(candidates: dict[str, dict], opportunity_types: list[str], limi
     return selected
 
 
+def apply_match_scores(opportunity: Opportunity, scores: dict):
+    if opportunity.match is None:
+        opportunity.match = OpportunityMatch(**scores)
+        return
+    for field, value in scores.items():
+        setattr(opportunity.match, field, value)
+
+
 def _is_detail_page(url: str, opportunity_type: str, parent_url: str) -> bool:
     parsed, parent = urlparse(url), urlparse(parent_url)
     if parsed.hostname != parent.hostname:
@@ -212,7 +220,7 @@ async def execute_discovery(run_id: int, requested_type: str, locations: list[st
                         duplicate_record.last_verified_at = datetime.now(timezone.utc)
                         if changed:
                             duplicate_record.notification_version += 1
-                            duplicate_record.match = OpportunityMatch(**score_opportunity(item, profile))
+                            apply_match_scores(duplicate_record, score_opportunity(item, profile))
                         continue
                     record = Opportunity(
                         title=item.title, normalized_title=normalize(item.title), opportunity_type=item.opportunity_type,
