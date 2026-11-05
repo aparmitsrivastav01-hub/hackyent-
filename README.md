@@ -38,6 +38,14 @@ npm run dev
 
 Open `http://localhost:3000`. Set `NEXT_PUBLIC_API_URL` if the API runs somewhere other than `http://localhost:8000`.
 
+## Daily automation on GitHub Actions
+
+`.github/workflows/daily-discovery.yml` runs at `18:30 UTC`, which is `12:00 AM Asia/Kolkata` the next day. GitHub-hosted runners run independently of your computer and dashboard. GitHub scheduled events can be delayed during high load, so this is a daily midnight schedule rather than a guaranteed exact-minute service.
+
+To activate it, configure repository Actions secrets `TINYFISH_API_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_TO`, and `DATABASE_URL`. `DATABASE_URL` must point to persistent PostgreSQL shared with the deployed dashboard backend; local SQLite cannot be shared with GitHub-hosted runners. Run `alembic upgrade head` on that database (the workflow also applies migrations), deploy the backend/dashboard against it, then enable Daily Automation in the dashboard. The enable switch is stored in the database and the scheduled runner skips work while disabled. `workflow_dispatch` can be used to manually inspect the external workflow. GitHub concurrency prevents overlapping scheduled jobs.
+
+The schedule is not active until this workflow is present on the repository's default branch and the required GitHub secrets and persistent database are configured. GitHub Actions run history is the source for confirming actual scheduled execution.
+
 ## How discovery works
 
 1. The dashboard starts a research run.
@@ -71,6 +79,7 @@ Tests mock external services and do not call TinyFish or Gemini.
 - `POST /api/discovery/run/{run_id}/status`
 - `GET /api/research/runs`
 - `GET /api/dashboard/stats`
+- `GET` / `PUT /api/automation/status`
 - `GET /api/email/status`, `POST /api/email/test`, and `POST /api/email/digest`
 - `GET` / `PUT /api/profile`
 

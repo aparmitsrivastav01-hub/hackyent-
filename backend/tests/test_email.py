@@ -109,6 +109,21 @@ def test_sent_opportunities_are_not_included_again_and_delivery_persists(db_sess
     assert db.scalar(func_count_delivery_items()) == 1
 
 
+def test_meaningfully_updated_opportunity_can_be_included_in_a_new_digest(db_session, monkeypatch):
+    configure_email(monkeypatch)
+    db, _ = db_session
+    opportunity = add_opportunity(db)
+    async def fake_post(payload, api_key, client=None):
+        return {"id": "re_versioned"}
+    monkeypatch.setattr(email, "_post_resend", fake_post)
+    asyncio.run(email.send_digest(db))
+    opportunity.deadline = datetime(2026, 12, 15, tzinfo=timezone.utc)
+    opportunity.notification_version += 1
+    db.commit()
+    pending = email._pending_opportunities(db)
+    assert [item.id for item in pending] == [opportunity.id]
+
+
 def func_count_delivery_items():
     from sqlalchemy import func
     return select(func.count(EmailDeliveryItem.id))

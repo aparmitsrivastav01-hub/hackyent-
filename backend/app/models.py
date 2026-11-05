@@ -40,6 +40,7 @@ class Opportunity(Base):
     employment_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="unknown", index=True)
     review_status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    notification_version: Mapped[int] = mapped_column(Integer, default=1)
     raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
     first_discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     last_verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -85,6 +86,13 @@ class UserProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
 
+class AutomationSetting(Base):
+    __tablename__ = "automation_settings"
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
 class EmailDelivery(Base):
     __tablename__ = "email_deliveries"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -106,6 +114,7 @@ class EmailDeliveryItem(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     delivery_id: Mapped[int] = mapped_column(ForeignKey("email_deliveries.id", ondelete="CASCADE"), index=True)
     opportunity_id: Mapped[int] = mapped_column(ForeignKey("opportunities.id", ondelete="CASCADE"), index=True)
+    opportunity_version: Mapped[int] = mapped_column(Integer, default=1)
     delivery: Mapped[EmailDelivery] = relationship(back_populates="items")
     opportunity: Mapped[Opportunity] = relationship()
     __table_args__ = (UniqueConstraint("delivery_id", "opportunity_id", name="uq_email_delivery_opportunity"),)

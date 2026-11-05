@@ -57,6 +57,10 @@ class ReviewRequest(BaseModel):
     decision: Literal["reviewed", "needs_review"]
 
 
+class AutomationUpdate(BaseModel):
+    enabled: bool
+
+
 class OpportunityOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

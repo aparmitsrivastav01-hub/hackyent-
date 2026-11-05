@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from email.utils import parseaddr
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session, joinedload
 
 from ..config import get_settings
@@ -93,7 +93,7 @@ def render_digest(opportunities: list[Opportunity], subject: str = SUBJECT) -> t
 
 
 def _pending_opportunities(db: Session) -> list[Opportunity]:
-    sent_ids = select(EmailDeliveryItem.opportunity_id).join(EmailDelivery).where(EmailDelivery.status == "sent")
+    sent_ids = select(EmailDeliveryItem.opportunity_id).join(EmailDelivery).where(EmailDelivery.status == "sent", EmailDeliveryItem.opportunity_version == Opportunity.notification_version)
     query = select(Opportunity).options(joinedload(Opportunity.match)).where(~Opportunity.id.in_(sent_ids)).order_by(Opportunity.first_discovered_at, Opportunity.id)
     return list(db.scalars(query).unique().all())
 
@@ -128,7 +128,7 @@ async def _post_resend(payload: dict, api_key: str, client: httpx.AsyncClient | 
             await client.aclose()
 
 
-async def _send_digest_unlocked(db: Session, *, opportunities: list[Opportunity] | None = None, allow_empty: bool = False, is_test: bool = False, client: httpx.AsyncClient | None = None) -> EmailDelivery:
+async def _send_digest_unlocked(db: Session, *, opportunities: list[Opportunity] | None = None, allow_empty: bool = False, is_test: bool = False, client: httpx.AsyncClient | None = None, subject: str | None = None) -> EmailDelivery:
     settings, missing = email_configuration()
     if missing:
         raise EmailConfigurationError("Email is not configured. Set " + ", ".join(missing) + ".")
@@ -136,12 +136,12 @@ async def _send_digest_unlocked(db: Session, *, opportunities: list[Opportunity]
     selected = [] if is_test else (opportunities if opportunities is not None else _pending_opportunities(db))
     if not selected and not allow_empty and not is_test:
         return None
-    subject = "OpportunityOS | Test email" if is_test else SUBJECT
+    subject = "OpportunityOS | Test email" if is_test else (subject or SUBJECT)
     html_body, text_body = render_digest(selected, subject)
     delivery = EmailDelivery(recipient=parseaddr(settings.email_to)[1], subject=subject, status="pending", opportunity_count=len(selected), is_test=is_test)
     db.add(delivery)
     db.flush()
-    delivery.items = [EmailDeliveryItem(opportunity=item) for item in selected]
+    delivery.items = [EmailDeliveryItem(opportunity=item, opportunity_version=item.notification_version) for item in selected]
     db.commit()
     try:
         response = await _post_resend({"from": settings.email_from, "to": [parseaddr(settings.email_to)[1]], "subject": subject, "html": html_body, "text": text_body}, settings.resend_api_key.strip(), client)
@@ -159,12 +159,12 @@ async def _send_digest_unlocked(db: Session, *, opportunities: list[Opportunity]
     return delivery
 
 
-async def send_digest(db: Session, *, opportunities: list[Opportunity] | None = None, allow_empty: bool = False, is_test: bool = False, client: httpx.AsyncClient | None = None) -> EmailDelivery:
+async def send_digest(db: Session, *, opportunities: list[Opportunity] | None = None, allow_empty: bool = False, is_test: bool = False, client: httpx.AsyncClient | None = None, subject: str | None = None) -> EmailDelivery:
     # Serialize sends within this API process so overlapping discovery runs and
     # dashboard clicks cannot select and email the same unsent records at once.
     await asyncio.to_thread(_send_lock.acquire)
     try:
-        return await _send_digest_unlocked(db, opportunities=opportunities, allow_empty=allow_empty, is_test=is_test, client=client)
+        return await _send_digest_unlocked(db, opportunities=opportunities, allow_empty=allow_empty, is_test=is_test, client=client, subject=subject)
     finally:
         _send_lock.release()
 

@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,8 +10,8 @@ from sqlalchemy.orm import Session, joinedload
 from .config import get_settings
 from .database import get_db
 from .discovery import execute_discovery, profile_or_default
-from .models import EmailDelivery, EmailDeliveryItem, Opportunity, OpportunityMatch, ResearchRun, UserProfile
-from .schemas import DiscoveryRequest, OpportunityOut, ProfilePayload, ReviewRequest
+from .models import AutomationSetting, EmailDelivery, EmailDeliveryItem, Opportunity, OpportunityMatch, ResearchRun, UserProfile
+from .schemas import AutomationUpdate, DiscoveryRequest, OpportunityOut, ProfilePayload, ReviewRequest
 from .services.matching import score_opportunity
 from .services.email import EmailConfigurationError, email_configuration, send_digest, serialize_delivery
 
@@ -22,6 +24,39 @@ async def lifespan(_: FastAPI):
 settings = get_settings()
 app = FastAPI(title="OpportunityOS API", description="AI-powered opportunity discovery and matching.", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin, "http://localhost:3000"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+def next_ist_run():
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    next_date = now.date() + timedelta(days=1)
+    return datetime.combine(next_date, time.min, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+
+@app.get("/api/automation/status")
+def automation_status(db: Session = Depends(get_db)):
+    config = db.get(AutomationSetting, 1)
+    enabled = bool(config and config.enabled)
+    tz = ZoneInfo("Asia/Kolkata")
+    today_start = datetime.combine(datetime.now(tz).date(), time.min, tzinfo=tz).astimezone(timezone.utc)
+    tomorrow = today_start + timedelta(days=1)
+    runs = db.scalars(select(ResearchRun).order_by(desc(ResearchRun.started_at)).limit(1)).first()
+    total_today = db.scalar(select(func.count(Opportunity.id)).where(Opportunity.first_discovered_at >= today_start, Opportunity.first_discovered_at < tomorrow)) or 0
+    hacks = db.scalar(select(func.count(Opportunity.id)).where(Opportunity.first_discovered_at >= today_start, Opportunity.first_discovered_at < tomorrow, Opportunity.opportunity_type == "hackathon")) or 0
+    internships = db.scalar(select(func.count(Opportunity.id)).where(Opportunity.first_discovered_at >= today_start, Opportunity.first_discovered_at < tomorrow, Opportunity.opportunity_type == "internship")) or 0
+    latest_email = db.scalar(select(EmailDelivery).order_by(desc(EmailDelivery.created_at)).limit(1))
+    return {"enabled": enabled, "status": "active" if enabled else "inactive", "schedule": "Daily at 12:00 AM IST", "timezone": "Asia/Kolkata", "next_run": next_ist_run() if enabled else None, "last_run": ({"id": runs.id, "status": runs.status, "started_at": runs.started_at, "completed_at": runs.completed_at, "pages_searched": runs.records_found, "saved": runs.records_saved, "duplicates": runs.duplicates_detected} if runs else None), "opportunities_today": total_today, "hackathons_today": hacks, "internships_today": internships, "last_email": serialize_delivery(latest_email)}
+
+
+@app.put("/api/automation/status")
+def update_automation(request: AutomationUpdate, db: Session = Depends(get_db)):
+    config = db.get(AutomationSetting, 1)
+    if config is None:
+        config = AutomationSetting(id=1, enabled=request.enabled)
+        db.add(config)
+    else:
+        config.enabled = request.enabled
+    db.commit()
+    return {"enabled": config.enabled, "status": "active" if config.enabled else "inactive"}
 
 
 @app.get("/api/health")
@@ -108,6 +143,9 @@ def review_opportunity(opportunity_id: int, request: ReviewRequest, db: Session 
 def start_discovery(request: DiscoveryRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     if not settings.tinyfish_api_key or not settings.gemini_api_key:
         raise HTTPException(503, "Configure TINYFISH_API_KEY and GEMINI_API_KEY before starting discovery.")
+    active = db.scalar(select(ResearchRun).where(ResearchRun.status.in_(["queued", "running"])).limit(1))
+    if active:
+        raise HTTPException(409, f"Discovery run {active.id} is already active.")
     run = ResearchRun(opportunity_type=request.type)
     db.add(run); db.commit(); db.refresh(run)
     background_tasks.add_task(execute_discovery, run.id, request.type, request.location, request.max_pages)

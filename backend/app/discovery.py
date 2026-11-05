@@ -1,5 +1,6 @@
 import asyncio
 import re
+from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
@@ -86,7 +87,7 @@ def _is_detail_page(url: str, opportunity_type: str, parent_url: str) -> bool:
     return False
 
 
-async def execute_discovery(run_id: int, requested_type: str, locations: list[str], max_pages: int = 20):
+async def execute_discovery(run_id: int, requested_type: str, locations: list[str], max_pages: int = 20, send_empty_digest: bool = False, digest_subject: str | None = None):
     settings = get_settings()
     db = SessionLocal()
     run = db.get(ResearchRun, run_id)
@@ -188,11 +189,31 @@ async def execute_discovery(run_id: int, requested_type: str, locations: list[st
                     if parsed.scheme not in ("http", "https") or not parsed.netloc:
                         continue
                     found_item = db.scalars(select(Opportunity).where(Opportunity.opportunity_type == item.opportunity_type)).all()
-                    if is_duplicate(item.title, item.organization, url, [*found_item, *pending_opportunities]):
-                        duplicates += 1
-                        continue
                     profile = profile_or_default(db)
                     status = derive_status(item.status, item.deadline, evidence_text=page.get("text", ""))
+                    candidates_to_check = [*found_item, *pending_opportunities]
+                    title_n, org_n = normalize(item.title), normalize(item.organization)
+                    duplicate_record = next((candidate for candidate in candidates_to_check if candidate.source_url.rstrip("/").lower() == url.rstrip("/").lower() or (SequenceMatcher(None, title_n, candidate.normalized_title).ratio() >= 0.92 and (SequenceMatcher(None, org_n, candidate.normalized_organization).ratio() >= 0.75 if org_n and candidate.normalized_organization else True))), None)
+                    if duplicate_record:
+                        duplicates += 1
+                        changed = False
+                        updates = {
+                            "deadline": item.deadline, "application_url": str(item.application_url) if item.application_url else None,
+                            "eligibility": item.eligibility, "location": item.location, "work_mode": item.work_mode,
+                            "prize_pool": item.prize_pool, "stipend": item.stipend, "description": item.description,
+                            "summary": item.summary, "status": status,
+                        }
+                        for field, value in updates.items():
+                            if field == "status" and value == "unknown":
+                                continue
+                            if value is not None and getattr(duplicate_record, field) != value:
+                                setattr(duplicate_record, field, value)
+                                changed = True
+                        duplicate_record.last_verified_at = datetime.now(timezone.utc)
+                        if changed:
+                            duplicate_record.notification_version += 1
+                            duplicate_record.match = OpportunityMatch(**score_opportunity(item, profile))
+                        continue
                     record = Opportunity(
                         title=item.title, normalized_title=normalize(item.title), opportunity_type=item.opportunity_type,
                         organization=item.organization, normalized_organization=normalize(item.organization),
@@ -218,9 +239,9 @@ async def execute_discovery(run_id: int, requested_type: str, locations: list[st
             except Exception as exc:
                 errors.append(f"Gemini extraction {url}: {exc}")
         db.commit()
-        if saved:
+        if saved or send_empty_digest:
             try:
-                delivery = await send_digest(db)
+                delivery = await send_digest(db, allow_empty=send_empty_digest, subject=digest_subject)
                 if delivery and delivery.status == "failed":
                     errors.append(f"Email notification failed: {delivery.error}")
             except EmailConfigurationError as exc:
